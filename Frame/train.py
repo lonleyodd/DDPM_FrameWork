@@ -21,9 +21,13 @@ class BasePipeline:
     def __init__(self, *args, **kwargs):
         self.save_dir = set_save_path(kwargs['save_dir'])
         self.logger = set_logger(self.save_dir["save_root"])
+        self.writer = SummaryWriter(self.save_dir["tensorboard_path"])
 
 
 class Pipeline(BasePipeline):
+    '''
+        this pipeline is used for training target model
+    '''
     def __init__(self, *args, **kwargs):
         super(Pipeline).__init__(*args, **kwargs)
         self.model = kwargs["model"]
@@ -34,10 +38,9 @@ class Pipeline(BasePipeline):
         self.checkpoint = kwargs["checkpoint"]
         self.epoch = kwargs["epoch"]
         self.batch_size = kwargs["batch_size"]
+
         self.eval_step = kwargs["eval_step"]
 
-        self.writer = SummaryWriter(self.save_dir["tensorboard_path"])
-        self.eval_step = kwargs["eval_step"]
         self.global_step = 0
 
         #  distribute training
@@ -83,13 +86,6 @@ class Pipeline(BasePipeline):
             data[k] = v.to(self.device)
         return data
 
-    def pipeline(self):
-        self.load_weight()
-
-        for i in range(self.epoch):
-            self.train()
-
-            self.eval()
 
     def train(self):
 
@@ -99,6 +95,7 @@ class Pipeline(BasePipeline):
             output = self.model(data)
 
             loss = output["loss"]
+            self.writer.add_scalar("train/loss",self.global_step,loss.item(0))
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -113,4 +110,17 @@ class Pipeline(BasePipeline):
 
     def eval(self):
         self.model.eval()
+        for idx,data in enumerate(self.val_dataset):
+            data=self.batch_to_device(data)
+            output=self.model(data)
+            logits=output['logits']
+
+
+    def pipeline(self):
+        self.load_weight()
+
+        for i in range(self.epoch):
+            self.train()
+
+            self.eval()
 
