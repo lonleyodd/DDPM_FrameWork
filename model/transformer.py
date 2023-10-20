@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import inspect
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
@@ -9,7 +10,6 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(shape)
-
 
 class RMSNorm(nn.Module):
     def __init__(self,dim,eps):
@@ -52,24 +52,26 @@ def percomputr_freqs_cis(dim,sqe_length,theta=10000.0):
     freqs_sin = torch.sin(freqs)
     return freqs_cos,freqs_sin
 
-
 def repeat_kv(x,n_rep):
     b,l,h,d=x.size()
     if n_rep==1:
         return x
     else:
         return x[:,:,:,None,:].expand(b,l,h,n_rep,d).reshape(b,l,h*n_rep,d)
+
 class Attention(nn.Module):
-    def __init__(self, hidden_dim,n_head,n_kv_head,max_seq_length,dropout):
+    def __init__(self, hidden_dim,n_head,max_seq_length,dropout,n_kv_head=None):
+        super().__init__()
         self.model_parallel = 1
         self.hidden_dim = hidden_dim
+
         self.n_head = n_head
-        self.n_kv_head = n_kv_head if n_kv_head is None else n_head
+        self.n_kv_head = self.n_head if n_kv_head is None else self.n_head
         self.max_seq_length=max_seq_length
 
         self.n_local_head = self.n_head / self.model_parallel
         self.n_local_kv_head = self.n_kv_head / self.model_parallel
-        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.n_rep = self.n_local_head // self.n_local_kv_head
 
         self.weight_q = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.weight_k = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -82,7 +84,7 @@ class Attention(nn.Module):
         # Pytorch>=2.0
         self.flash=hasattr(torch.nn.functional,"scaled_dot_product_attention")
         if not self.flash:
-            mask=torch.full((1,1,self.max_seq_length,self.max_seq_len),float("-inf"))
+            mask=torch.full((1,1,self.max_seq_length,self.max_seq_length),float("-inf"))
             mask = torch.triu(mask,diagonal=1)
             self.register_buffer("mask",mask)
 
@@ -102,6 +104,7 @@ class Attention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+
 
         if self.flash:
             output = torch.nn.functional.scaled_dot_product_attention(q, k, v,
@@ -134,12 +137,19 @@ class FeedForward(nn.Module):
         return self.dropout(self.linear2(F.silu(self.linear1(x))*self.linear3(x)))
 
 class TransformerBlock(nn.Module):
-    def __init__(self,n_head,hidden_dim,eps,layer_id):
+    def __init__(self,n_head,hidden_dim,eps,layer_id,max_seq_length,drop_out,multiple):
         super().__init__()
         self.n_head=n_head
         self.hidden_dim=hidden_dim
-        self.attention=Attention()
-        self.feed_forward=FeedForward(hidden_dim,hidden_dim*4)
+        self.max_seq_length=max_seq_length
+        self.drop_out=drop_out
+        self.attention=Attention(
+            hidden_dim=self.hidden_dim,
+            n_head=self.n_head,
+            max_seq_length=self.max_seq_length,
+            dropout=self.drop_out
+        )
+        self.feed_forward=FeedForward(hidden_dim,hidden_dim*4,multiple,drop_out)
 
         self.layer_id = layer_id
         self.layer_norm1 = RMSNorm(hidden_dim,eps)
@@ -150,57 +160,58 @@ class TransformerBlock(nn.Module):
         return ffn_out
 
 class Tranformer(nn.Module):
-    def __init__(self, n_head,
-                 n_layers,
-                 vocab_size,
-                 hidden_dim,
-                 max_seq_length=1024,
-                 dropout=0.2,
-                 norm_eps=1e-5,
-                ):
-        self.n_head = n_head
-        self.n_layers = n_layers
-        self.norm_eps=norm_eps
-        self.hidden_dim=hidden_dim
-        self.max_seq_length=max_seq_length
-        self.vocab_size=vocab_size
-        self.attention = Attention()
-        self.dropout=nn.Dropout(dropout)
+    def __init__(self, cfg):
+        super().__init__()
+        self.n_head = cfg.n_head
+        self.n_layer = cfg.n_layer
+        self.norm_eps=cfg.norm_eps
+        self.hidden_dim=cfg.hidden_dim
+        self.max_seq_length=cfg.max_seq_length
+        self.vocab_size=cfg.vocab_size
+
+        self.token_embedding = nn.Embedding(self.vocab_size, self.hidden_dim)
+        self.dropout=nn.Dropout(cfg.drop_out)
         self.layers=nn.ModuleList()
-        for i in range(self.n_layers):
+        for i in range(self.n_layer):
             self.layers.append(
                 TransformerBlock(
-                hidden_dim=self.hidden_dim,
-                n_head=self.n_head,
-                eps=self.norm_eps,
-                layer_id=i
+                    hidden_dim=self.hidden_dim,
+                    n_head=self.n_head,
+                    eps=self.norm_eps,
+                    drop_out=cfg.drop_out,
+                    max_seq_length=self.max_seq_length,
+                    layer_id=i,
+                    multiple=cfg.multiple,
+
             )
         )
-        self.layer_norm=RMSNorm(hidden_dim,eps=self.eps)
-        self.token_embedding=nn.Embedding(vocab_size,hidden_dim)
+        self.layer_norm=RMSNorm(self.hidden_dim,eps=self.norm_eps)
         self.output_gate=nn.Linear(self.hidden_dim,self.vocab_size)
 
         freqs_cos,freqs_sin=percomputr_freqs_cis(self.hidden_dim//self.n_head,
                                                 self.max_seq_length
-                                                   )
+                                                )
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
         self.apply(self._init_weights)
         for n,p in self.named_parameters():
             if n.endswith('w3.weight') or n.endswith('wo.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layer))
+     
 
-        self.loss=None
     def _init_weights(self,module):
         if isinstance(module,nn.Linear):
             torch.nn.init.normal_(module.weight,mean=0.0,std=0.02)
-            if module.bias:
+            if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module,nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
     def forward(self,tokens,targets):
-        batch_size,length,dim = tokens.size()
+        
+
+        batch_size,length = tokens.size()
         hidden_tensor=self.dropout(self.token_embedding(tokens))
         freqs_cos = self.freqs_cos[:length]
         freqs_sin = self.freqs_sin[:length]
@@ -210,18 +221,106 @@ class Tranformer(nn.Module):
         hidden_tensor=self.layer_norm(hidden_tensor)
 
         if targets is not None:
-            logits=self.output(hidden_tensor)
-            self.loss=F.cross_entropy(logits.view(-1,logits.size(-1)),targets.view(-1),ignore_index=-1)
+            logits=self.output_gate(hidden_tensor)
+            loss=F.cross_entropy(logits.view(-1,logits.size(-1)),targets.view(-1),ignore_index=-1)
         else:
-            logits = self.output(hidden_tensor[:,[-1],:])
-            self.loss = None
+            logits = self.output_gate(hidden_tensor[:,[-1],:])
+            loss = None
 
-        return logits
+        output={
+            "loss":loss,
+            "logits":logits
+        }
+        return output
 
 
+    def param_configure(self,weight_decay,learning_rate,betas,device_type):
+        param_dict={}
+        for n, p in self.named_parameters():
+            if p.requires_grad:
+                param_dict[n]=p
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
 
+        optimizer_groups=[
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
 
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+      
+
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+       
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+
+        optimizer = torch.optim.AdamW(optimizer_groups, lr=learning_rate, betas=betas, **extra_args)
+
+        print(f"using fused AdamW: {use_fused}")
+        return optimizer
+
+# class CustomLRScheduler():
+#     def __init__(self, cfg, optimizer):
+#         self.lr_max = cfg.lr_max
+#         self.warmup_iters =cfg.warmup_iters
+#         self.lr_decay_itesr = cfg.lr_decay_iters
+#         self.lr_min = cfg.lr_min
+#         self.optimizer = optimizer
+    
+#     def get_lr(self,iter):
+#         # 1) linear warmup for warmup_iters steps
+#         if iter < self.warmup_iters:
+#             return self.lr_max * iter / self.warmup_iters
+#         # 2) if it > lr_decay_iters, return min learning rate
+#         if iter > self.lr_decay_iters:
+#             return self.lr_min
+#         # 3) in between, use cosine decay down to min learning rate
+#         decay_ratio = (iter - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
+#         assert 0 <= decay_ratio <= 1
+#         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+#         return self.lr_min + coeff * (self.lr_max - self.lr_min)
+
+class CustomLRScheduler():
+    def __init__(self, cfg, optimizer):
+        self.lr_max = cfg.lr_max
+        self.warmup_iters =cfg.warmup_iters
+        self.lr_decay_itesr = cfg.lr_decay_iters
+        self.lr_min = cfg.lr_min
+        self.optimizer = optimizer
+        self.cur_T=0
+    
+    def get_lr(self):
+        # 1) linear warmup for warmup_iters steps
+        if self.cur_T < self.warmup_iters:
+            return self.lr_max * self.cur_T / self.warmup_iters
+        # 2) if it > lr_decay_iters, return min learning rate
+        if self.cur_T  > self.lr_decay_iters:
+            return self.lr_min
+        # 3) in between, use cosine decay down to min learning rate
+        decay_ratio = (self.cur_T  - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+        return self.lr_min + coeff * (self.lr_max - self.lr_min)
+
+    def step(self):
+        lr = self.get_lr()
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+        self.cur_T+=1
+    
 
 if __name__ == "__main__":
-    percomputr_freqs_cis(512,1024)
+    model=Tranformer(
+        n_head=12,
+        n_layers=1,
+        hidden_dim=512,
+        vocab_size=50000,
+        max_seq_length=1024,
+        dropout=0.1
+    )
+    print(model)
 

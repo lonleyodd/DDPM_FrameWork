@@ -1,0 +1,38 @@
+
+Dataset:
+  file_path: "./cache/wikipedia.bin"
+  max_length: 256
+
+Model:  
+  n_head: 8
+  n_layer: 6
+  hidden_dim: 512
+  max_length: 512
+  drop_out: 0.1
+  norm_eps: 0.0001
+  vocab_size: 64793
+  max_seq_length: 1024
+  multiple: 32
+
+Optimizer:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+
+Scheduler:
+  lr_max: 0.0003
+  lr_min: 0.00001
+  warmup_iters: 1000
+  lr_decay_iters: 80000
+  
+
+Trainer:
+  batch_size: 12
+  epoch: 10
+  eval_iters: 5000
+  save_iters: 5000
+  lr: 0.00001
+  checkpoint: None
+  save_dir: "/home/wangh/code/Train_FrameWork/checkpoint"
+
