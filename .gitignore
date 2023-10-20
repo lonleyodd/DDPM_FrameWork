@@ -1,3 +1,4 @@
 cache/
 chatglm_tokenizer/
 checkpoint/
+**/__pycache__
