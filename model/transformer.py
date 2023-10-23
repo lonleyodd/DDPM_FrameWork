@@ -221,7 +221,7 @@ class Tranformer(nn.Module):
         hidden_tensor=self.layer_norm(hidden_tensor)
 
         if targets is not None:
-            logits=self.output_gate(hidden_tensor)
+            logits = self.output_gate(hidden_tensor)
             loss=F.cross_entropy(logits.view(-1,logits.size(-1)),targets.view(-1),ignore_index=-1)
         else:
             logits = self.output_gate(hidden_tensor[:,[-1],:])
@@ -263,32 +263,12 @@ class Tranformer(nn.Module):
         print(f"using fused AdamW: {use_fused}")
         return optimizer
 
-# class CustomLRScheduler():
-#     def __init__(self, cfg, optimizer):
-#         self.lr_max = cfg.lr_max
-#         self.warmup_iters =cfg.warmup_iters
-#         self.lr_decay_itesr = cfg.lr_decay_iters
-#         self.lr_min = cfg.lr_min
-#         self.optimizer = optimizer
-    
-#     def get_lr(self,iter):
-#         # 1) linear warmup for warmup_iters steps
-#         if iter < self.warmup_iters:
-#             return self.lr_max * iter / self.warmup_iters
-#         # 2) if it > lr_decay_iters, return min learning rate
-#         if iter > self.lr_decay_iters:
-#             return self.lr_min
-#         # 3) in between, use cosine decay down to min learning rate
-#         decay_ratio = (iter - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
-#         assert 0 <= decay_ratio <= 1
-#         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-#         return self.lr_min + coeff * (self.lr_max - self.lr_min)
 
 class CustomLRScheduler():
     def __init__(self, cfg, optimizer):
         self.lr_max = cfg.lr_max
         self.warmup_iters =cfg.warmup_iters
-        self.lr_decay_itesr = cfg.lr_decay_iters
+        self.lr_decay_iters = cfg.lr_decay_iters
         self.lr_min = cfg.lr_min
         self.optimizer = optimizer
         self.cur_T=0
@@ -314,13 +294,19 @@ class CustomLRScheduler():
     
 
 if __name__ == "__main__":
-    model=Tranformer(
-        n_head=12,
-        n_layers=1,
+    from easydict import EasyDict
+    model_cfg=EasyDict(dict(
+        n_head=8,
+        n_layer=1,
         hidden_dim=512,
-        vocab_size=50000,
+        vocab_size=64794,
         max_seq_length=1024,
-        dropout=0.1
-    )
-    print(model)
+        drop_out=0.1,
+        norm_eps=0.0001,
+        multiple=32
+    ))
+    model=Tranformer(model_cfg)
+    x=torch.randint(0,64793,(10,256))
+    y=torch.randint(0,64793,(10,256))
+    print(model(x,y))
 

@@ -14,10 +14,14 @@ class BaseDataset(Dataset):
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, cfg):
+    def __init__(self, cfg,train=False):
         super().__init__()
-        self.data_path=cfg.file_path
+        if train:
+            self.data_path=cfg.train_path
+        else:
+            self.data_path=cfg.val_path
         self.max_length=cfg.max_length
+        
 
         data_list = []
         with open(self.data_path,'r') as f:

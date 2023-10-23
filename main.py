@@ -20,9 +20,8 @@ def main():
 
     
     # build your dataset
-    train_dataset=PretrainDataset(cfg.Dataset)
-    test_dataset =None
-    val_dataset  =None
+    train_dataset=PretrainDataset(cfg.Dataset,train=True)
+    val_dataset  =PretrainDataset(cfg.Dataset,train=False)
 
     #build your optimizer
     trainer_cfg=cfg.Trainer
@@ -30,7 +29,6 @@ def main():
         trainer_cfg,
         model=model,
         train_dataset=train_dataset,
-        test_dataset=test_dataset,
         val_dataset=val_dataset,
         optimizer=optimizer,
         scheduler=scheduler,

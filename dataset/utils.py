@@ -71,16 +71,16 @@ def PretrainDataset_cat(data_list):
         f.write(arr.tobytes())
 
 if __name__ == "__main__":
-    # data_map={
+    data_map={
     #     "wikipedia":"/home/wangh/dataset/nlp_data/wikipedia-cn-20230720-filtered.json",
-    #     "medical":"/home/wangh/dataset/nlp_data/medical/pretrain/train_encyclopedia.json",
+        "medical_val":"/home/wangh/dataset/nlp_data/medical/pretrain/valid_encyclopedia.json",
     #     "baidu":"/home/wangh/dataset/nlp_data/baidubaike.json", 
-    # }
-    # for name,data in data_map.items():
-    #     PretrainProcess(data,name)
-    data_list=[
-        "./cache/baidu.bin",
-        "./cache/medical.bin",
-        "./cache/wikipedia.bin",
-    ]
-    PretrainDataset_cat(data_list)
+    }
+    for name,data in data_map.items():
+        PretrainProcess(data,name)
+    # data_list=[
+    #     "./cache/baidu.bin",
+    #     "./cache/medical.bin",
+    #     "./cache/wikipedia.bin",
+    # ]
+    # PretrainDataset_cat(data_list)

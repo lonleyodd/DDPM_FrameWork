@@ -1,11 +1,12 @@
 
 Dataset:
-  file_path: "./cache/wikipedia.bin"
-  max_length: 256
+  train_path: "./cache/pretrain_data.bin"
+  val_path: "./cache/medical_val.bin"
+  max_length: 512
 
 Model:  
   n_head: 8
-  n_layer: 6
+  n_layer: 12
   hidden_dim: 512
   max_length: 512
   drop_out: 0.1
@@ -22,17 +23,18 @@ Optimizer:
 
 Scheduler:
   lr_max: 0.0003
-  lr_min: 0.00001
+  lr_min: 0.00003
   warmup_iters: 1000
   lr_decay_iters: 80000
   
 
 Trainer:
-  batch_size: 12
-  epoch: 10
+  batch_size: 32
+  epoch: 5
   eval_iters: 5000
   save_iters: 5000
   lr: 0.00001
-  checkpoint: None
+  checkpoint_path: None
   save_dir: "/home/wangh/code/Train_FrameWork/checkpoint"
+  ddp: True
 
